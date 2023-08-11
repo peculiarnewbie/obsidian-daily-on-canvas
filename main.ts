@@ -1,13 +1,25 @@
-import { App, Editor, MarkdownView, Modal, Notice, Plugin, PluginSettingTab, Setting } from 'obsidian';
+import { App, Editor, MarkdownView, Modal, Notice, Plugin, PluginSettingTab, Setting, TFile, Stat } from 'obsidian';
+import { AllCanvasNodeData, CanvasData, CanvasFileData } from "obsidian/canvas";
 
 // Remember to rename these classes and interfaces!
 
 interface MyPluginSettings {
-	mySetting: string;
+	canvasName: string;
+	groupName: string;
+	journalDir: string;
+}
+
+interface NodeCoordinate {
+	x1: number;
+	x2: number;
+	y1: number;
+	y2: number;
 }
 
 const DEFAULT_SETTINGS: MyPluginSettings = {
-	mySetting: 'default'
+	canvasName: 'Daily.canvas',
+	groupName: `Daily`,
+	journalDir: '',
 }
 
 export default class MyPlugin extends Plugin {
@@ -16,54 +28,90 @@ export default class MyPlugin extends Plugin {
 	async onload() {
 		await this.loadSettings();
 
-		// This creates an icon in the left ribbon.
-		const ribbonIconEl = this.addRibbonIcon('dice', 'Sample Plugin', (evt: MouseEvent) => {
-			// Called when the user clicks the icon.
-			new Notice('This is a notice!');
-		});
-		// Perform additional things with the ribbon
-		ribbonIconEl.addClass('my-plugin-ribbon-class');
+		
+		const updateCanvas = async () => {
+			// const file = await this.app.vault.create('nuuuu.md', '# Hello World!');
+			// console.log(file)
 
-		// This adds a status bar item to the bottom of the app. Does not work on mobile apps.
-		const statusBarItemEl = this.addStatusBarItem();
-		statusBarItemEl.setText('Status Bar Text');
+			const today = new Date();
+			
+			const formattedDate = today.getFullYear() + "-" + (today.getMonth() + 1).toString().padStart(2, '0') + "-" + today.getDate().toString().padStart(2, '0');
 
-		// This adds a simple command that can be triggered anywhere
-		this.addCommand({
-			id: 'open-sample-modal-simple',
-			name: 'Open sample modal (simple)',
-			callback: () => {
-				new SampleModal(this.app).open();
-			}
-		});
-		// This adds an editor command that can perform some operation on the current editor instance
-		this.addCommand({
-			id: 'sample-editor-command',
-			name: 'Sample editor command',
-			editorCallback: (editor: Editor, view: MarkdownView) => {
-				console.log(editor.getSelection());
-				editor.replaceSelection('Sample Editor Command');
-			}
-		});
-		// This adds a complex command that can check whether the current state of the app allows execution of the command
-		this.addCommand({
-			id: 'open-sample-modal-complex',
-			name: 'Open sample modal (complex)',
-			checkCallback: (checking: boolean) => {
-				// Conditions to check
-				const markdownView = this.app.workspace.getActiveViewOfType(MarkdownView);
-				if (markdownView) {
-					// If checking is true, we're simply "checking" if the command can be run.
-					// If checking is false, then we want to actually perform the operation.
-					if (!checking) {
-						new SampleModal(this.app).open();
+			
+
+			console.log("formatted: ", formattedDate);
+			
+			const files = this.app.vault.getFiles();
+
+			const canvas = files.find(file => file.name === this.settings.canvasName);
+
+			const handleEmptyCanvas = () => {
+				const data: CanvasData = {
+					nodes: [],
+					edges: [],
+				};
+				return data;
+			};
+
+			const getCanvasContents = async (file: TFile): Promise<CanvasData> => {
+				const fileContents = await this.app.vault.read(file);
+				if (!fileContents) {
+					return handleEmptyCanvas();
+				}
+				const canvasData = JSON.parse(fileContents) as CanvasData;
+				return canvasData;
+			};
+	
+			if(canvas !== undefined) {
+				console.log("canvas found", canvas)
+				const canvasData = await getCanvasContents(canvas);
+
+				console.log("canvas data:", canvasData)
+
+				const groupNode = canvasData.nodes.find(node => node.label === this.settings.groupName && node.type === "group")
+
+				let nodesInGroup : AllCanvasNodeData[] = []
+				
+				if(groupNode){
+					const groupCoordinate : NodeCoordinate = {
+						x1: groupNode.x,
+						x2: groupNode.x + groupNode.width,
+						y1: groupNode.y,
+						y2: groupNode.y + groupNode.height
 					}
 
-					// This command will only show up in Command Palette when the check function returns true
-					return true;
+					canvasData.nodes.forEach((node) => {
+						// checks if node is in group
+						if(node.x > groupCoordinate.x1 && node.x + node.width < groupCoordinate.x2 && node.y > groupCoordinate.y1 && node.y + node.height < groupCoordinate.y2){
+							nodesInGroup.push(node)
+						}
+					})
+
+					console.log("nodes in group: ", nodesInGroup)
+
+					nodesInGroup.forEach((node) => {
+						canvasData.nodes.remove(node);
+						node.file = `${this.settings.journalDir}${formattedDate}.md`;
+						canvasData.nodes.push(node);
+					})
+
+					const fileContents = JSON.stringify(canvasData);
+					await this.app.vault.modify(canvas, fileContents);
 				}
+
+				// should be optional, can acts as a homepage
+
+				// const leaf = this.app.workspace.getLeaf();
+				// await leaf.openFile(canvas, { active: true });
 			}
-		});
+		}
+		
+		this.app.workspace.onLayoutReady(() => {
+			updateCanvas();
+
+		})
+		console.log('hello console')
+
 
 		// This adds a settings tab so the user can configure various aspects of the plugin
 		this.addSettingTab(new SampleSettingTab(this.app, this));
@@ -91,22 +139,6 @@ export default class MyPlugin extends Plugin {
 	}
 }
 
-class SampleModal extends Modal {
-	constructor(app: App) {
-		super(app);
-	}
-
-	onOpen() {
-		const {contentEl} = this;
-		contentEl.setText('Woah!');
-	}
-
-	onClose() {
-		const {contentEl} = this;
-		contentEl.empty();
-	}
-}
-
 class SampleSettingTab extends PluginSettingTab {
 	plugin: MyPlugin;
 
@@ -121,14 +153,36 @@ class SampleSettingTab extends PluginSettingTab {
 		containerEl.empty();
 
 		new Setting(containerEl)
-			.setName('Setting #1')
-			.setDesc('It\'s a secret')
+			.setName('Canvas Name')
+			.setDesc('Canvas to update')
 			.addText(text => text
-				.setPlaceholder('Enter your secret')
-				.setValue(this.plugin.settings.mySetting)
+				.setPlaceholder('Daily.canvas')
+				.setValue(this.plugin.settings.canvasName)
 				.onChange(async (value) => {
-					this.plugin.settings.mySetting = value;
+					this.plugin.settings.canvasName = value;
 					await this.plugin.saveSettings();
 				}));
+
+		new Setting(containerEl)
+		.setName('Group Name')
+		.setDesc('Name of the group containing daily nodes')
+		.addText(text => text
+			.setPlaceholder('Daily')
+			.setValue(this.plugin.settings.groupName)
+			.onChange(async (value) => {
+				this.plugin.settings.groupName = value;
+				await this.plugin.saveSettings();
+			}));
+
+		new Setting(containerEl)
+		.setName('Journal Directory')
+		.setDesc('Directory of the Daily Journal file')
+		.addText(text => text
+			.setPlaceholder('Journal/')
+			.setValue(this.plugin.settings.journalDir)
+			.onChange(async (value) => {
+				this.plugin.settings.journalDir = value;
+				await this.plugin.saveSettings();
+			}));
 	}
 }
